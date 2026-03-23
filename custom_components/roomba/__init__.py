@@ -19,7 +19,16 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_BLID, CONF_CONTINUOUS, DOMAIN, PLATFORMS, ROOMBA_SESSION
+from .const import (
+    CONF_BLID,
+    CONF_CLOUD_EMAIL,
+    CONF_CLOUD_PASSWORD,
+    CONF_CONTINUOUS,
+    CONF_ROBOT_ID,
+    DOMAIN,
+    PLATFORMS,
+    ROOMBA_SESSION,
+)
 from .models import RoombaData
 
 _LOGGER = logging.getLogger(__name__)
@@ -27,8 +36,6 @@ _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Set the config entry up."""
-    # Set up roomba platforms with config entry
-
     if not config_entry.options:
         hass.config_entries.async_update_entry(
             config_entry,
@@ -37,6 +44,32 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 CONF_DELAY: config_entry.data[CONF_DELAY],
             },
         )
+
+    # Fetch room data from iRobot cloud BEFORE connecting roombapy
+    # (Roomba only allows one MQTT connection at a time)
+    rooms = None
+    map_id = None
+    user_pmapv_id = None
+    cloud_email = config_entry.data.get(CONF_CLOUD_EMAIL)
+    cloud_password = config_entry.data.get(CONF_CLOUD_PASSWORD)
+    robot_id = config_entry.data.get(CONF_ROBOT_ID)
+
+    if cloud_email and cloud_password:
+        try:
+            rooms, map_id, user_pmapv_id = await hass.async_add_executor_job(
+                _fetch_cloud_room_data, cloud_email, cloud_password, robot_id
+            )
+            _LOGGER.info(
+                "Loaded %d rooms from iRobot cloud for %s",
+                len(rooms) if rooms else 0,
+                config_entry.data[CONF_BLID],
+            )
+        except Exception:
+            _LOGGER.warning(
+                "Failed to fetch room data from iRobot cloud, "
+                "room-targeted cleaning will not be available",
+                exc_info=True,
+            )
 
     roomba = await hass.async_add_executor_job(
         partial(
@@ -62,7 +95,13 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_disconnect_roomba)
     )
 
-    domain_data = RoombaData(roomba, config_entry.data[CONF_BLID])
+    domain_data = RoombaData(
+        roomba=roomba,
+        blid=config_entry.data[CONF_BLID],
+        rooms=rooms,
+        map_id=map_id,
+        user_pmapv_id=user_pmapv_id,
+    )
     hass.data.setdefault(DOMAIN, {})[config_entry.entry_id] = domain_data
 
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
@@ -71,6 +110,20 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         config_entry.add_update_listener(async_update_options)
 
     return True
+
+
+def _fetch_cloud_room_data(
+    email: str, password: str, robot_id: str | None
+) -> tuple[list[dict] | None, str | None, str | None]:
+    """Fetch room data from the iRobot cloud (runs in executor)."""
+    from irbt import Cloud, Robot
+
+    cloud = Cloud(username=email, password=password)
+    robot = Robot(cloud=cloud, rid=robot_id)
+    rooms = robot.rooms()
+    map_id = robot._current_map_id
+    user_pmapv_id = robot._current_user_pmapv_id
+    return rooms, map_id, user_pmapv_id
 
 
 async def async_connect_or_timeout(
@@ -83,7 +136,6 @@ async def async_connect_or_timeout(
             _LOGGER.debug("Initialize connection to vacuum")
             await hass.async_add_executor_job(roomba.connect)
             while not roomba.roomba_connected or name is None:
-                # Waiting for connection and check data is ready
                 name = roomba_reported_state(roomba).get("name", None)
                 if name:
                     break
@@ -92,7 +144,6 @@ async def async_connect_or_timeout(
         _LOGGER.debug("Error to connect to vacuum: %s", err)
         raise CannotConnect from err
     except TimeoutError as err:
-        # api looping if user or password incorrect and roomba exist
         await async_disconnect_or_timeout(hass, roomba)
         _LOGGER.debug("Timeout expired: %s", err)
         raise CannotConnect from err

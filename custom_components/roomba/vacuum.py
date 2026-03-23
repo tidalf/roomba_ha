@@ -6,15 +6,28 @@ import asyncio
 import logging
 from typing import Any
 
+import voluptuous as vol
+
 from homeassistant.components.vacuum import (
     ATTR_STATUS,
     StateVacuumEntity,
     VacuumActivity,
     VacuumEntityFeature,
 )
+
+try:
+    from homeassistant.components.vacuum import Segment
+    _HAS_CLEAN_AREA = hasattr(VacuumEntityFeature, "CLEAN_AREA")
+except ImportError:
+    _HAS_CLEAN_AREA = False
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers.entity_platform import (
+    AddConfigEntryEntitiesCallback,
+    async_get_current_platform,
+)
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_system import METRIC_SYSTEM
 
@@ -32,6 +45,8 @@ SUPPORT_IROBOT = (
     | VacuumEntityFeature.STOP
     | VacuumEntityFeature.LOCATE
 )
+if _HAS_CLEAN_AREA:
+    SUPPORT_IROBOT = SUPPORT_IROBOT | VacuumEntityFeature.CLEAN_AREA
 
 STATE_MAP = {
     "": VacuumActivity.IDLE,
@@ -53,7 +68,7 @@ ATTR_CLEANED_AREA = "cleaned_area"
 ATTR_ERROR = "error"
 ATTR_ERROR_CODE = "error_code"
 ATTR_POSITION = "position"
-ATTR_SOFTWARE_VERSION = "software_version"
+ATTR_ROOMS = "rooms"
 
 ATTR_BIN_FULL = "bin_full"
 ATTR_BIN_PRESENT = "bin_present"
@@ -108,8 +123,16 @@ async def async_setup_entry(
     else:
         constructor = RoombaVacuum
 
-    roomba_vac = constructor(roomba, blid)
+    roomba_vac = constructor(roomba, blid, domain_data)
     async_add_entities([roomba_vac])
+
+    # Register the clean_rooms service on the vacuum platform
+    platform = async_get_current_platform()
+    platform.async_register_entity_service(
+        "clean_rooms",
+        {vol.Required("rooms"): vol.All(cv.ensure_list, [cv.string])},
+        "async_clean_rooms",
+    )
 
 
 class IRobotVacuum(IRobotEntity, StateVacuumEntity):
@@ -119,10 +142,18 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
     _attr_supported_features = SUPPORT_IROBOT
     _attr_available = True  # Always available, otherwise setup will fail
 
-    def __init__(self, roomba, blid) -> None:
+    def __init__(self, roomba, blid, domain_data: RoombaData) -> None:
         """Initialize the iRobot handler."""
         super().__init__(roomba, blid)
         self._cap_position = self.vacuum_state.get("cap", {}).get("pose") == 1
+        self._domain_data = domain_data
+
+        # Only advertise CLEAN_AREA if available and room data exists
+        if not _HAS_CLEAN_AREA or not domain_data.rooms:
+            if _HAS_CLEAN_AREA:
+                self._attr_supported_features = (
+                    self._attr_supported_features & ~VacuumEntityFeature.CLEAN_AREA
+                )
 
     @property
     def activity(self) -> VacuumActivity:
@@ -178,6 +209,13 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 position = f"({pos_x}, {pos_y}, {theta})"
             state_attrs[ATTR_POSITION] = position
 
+        # Rooms from cloud
+        if self._domain_data.rooms:
+            state_attrs[ATTR_ROOMS] = {
+                room.get("id"): room.get("name")
+                for room in self._domain_data.rooms
+            }
+
         return state_attrs
 
     def get_cleaning_status(self, state) -> tuple[int, int]:
@@ -210,8 +248,18 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         """Start or resume the cleaning task."""
         if self.state == VacuumActivity.PAUSED:
             await self.hass.async_add_executor_job(self.vacuum.send_command, "resume")
-        else:
-            await self.hass.async_add_executor_job(self.vacuum.send_command, "start")
+            return
+
+        # Check if a specific room is selected
+        room_select = self._domain_data.room_select
+        if room_select is not None:
+            from .select import OPTION_ALL_ROOMS
+            selected = room_select.current_option
+            if selected and selected != OPTION_ALL_ROOMS:
+                await self.async_clean_rooms(rooms=[selected])
+                return
+
+        await self.hass.async_add_executor_job(self.vacuum.send_command, "start")
 
     async def async_stop(self, **kwargs: Any) -> None:
         """Stop the vacuum cleaner."""
@@ -241,10 +289,102 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         params: dict[str, Any] | list[Any] | None = None,
         **kwargs: Any,
     ) -> None:
-        """Send raw command."""
+        """Send raw command.
+
+        Supports a special 'clean_rooms' command that accepts room names or IDs:
+          command: clean_rooms
+          params: {"rooms": ["Kitchen", "Living Room"]}
+            or
+          params: {"room_ids": ["abc123", "def456"]}
+        """
         _LOGGER.debug("async_send_command %s (%s), %s", command, params, kwargs)
+
+        if command == "clean_rooms" and isinstance(params, dict):
+            await self.async_clean_rooms(rooms=params.get("rooms", []))
+            return
+
         await self.hass.async_add_executor_job(
             self.vacuum.send_command, command, params
+        )
+
+    async def async_clean_rooms(self, rooms: list[str] | None = None, **kwargs: Any) -> None:
+        """Start cleaning specific rooms by name."""
+        room_names = rooms or []
+        if not self._domain_data.rooms:
+            _LOGGER.error("No room data available. Ensure cloud credentials are configured.")
+            return
+        if not self._domain_data.map_id or not self._domain_data.user_pmapv_id:
+            _LOGGER.error("No map data available for room-targeted cleaning.")
+            return
+
+        # Resolve room names to IDs
+        rooms_by_name = {
+            room.get("name", "").lower(): room.get("id")
+            for room in self._domain_data.rooms
+        }
+        room_ids = []
+        for name in room_names:
+            rid = rooms_by_name.get(name.lower())
+            if rid:
+                room_ids.append(rid)
+            else:
+                _LOGGER.warning(
+                    "Room '%s' not found. Available: %s",
+                    name,
+                    [r.get("name") for r in self._domain_data.rooms],
+                )
+
+        if not room_ids:
+            _LOGGER.error("No valid rooms to clean.")
+            return
+
+        # Build the payload matching irbt's _make_payload format
+        regions = [{"type": "rid", "region_id": rid} for rid in room_ids]
+        payload = {
+            "command": "start",
+            "initiator": "rmtApp",
+            "ordered": 0,
+            "pmap_id": self._domain_data.map_id,
+            "regions": regions,
+            "user_pmapv_id": self._domain_data.user_pmapv_id,
+        }
+
+        _LOGGER.info("Sending room cleaning command for: %s", room_names)
+        await self.hass.async_add_executor_job(
+            self.vacuum.send_command, "start", payload
+        )
+
+    async def async_get_segments(self) -> list:
+        """Return the list of rooms as segments for CLEAN_AREA support."""
+        if not _HAS_CLEAN_AREA or not self._domain_data.rooms:
+            return []
+        return [
+            Segment(
+                id=room.get("id", ""),
+                name=room.get("name", room.get("id", "")),
+            )
+            for room in self._domain_data.rooms
+        ]
+
+    async def async_clean_segments(self, segment_ids: list[str], **kwargs: Any) -> None:
+        """Clean the specified segments (rooms) by their IDs."""
+        if not self._domain_data.map_id or not self._domain_data.user_pmapv_id:
+            _LOGGER.error("No map data available for room-targeted cleaning.")
+            return
+
+        regions = [{"type": "rid", "region_id": rid} for rid in segment_ids]
+        payload = {
+            "command": "start",
+            "initiator": "rmtApp",
+            "ordered": 0,
+            "pmap_id": self._domain_data.map_id,
+            "regions": regions,
+            "user_pmapv_id": self._domain_data.user_pmapv_id,
+        }
+
+        _LOGGER.info("Sending segment cleaning command for IDs: %s", segment_ids)
+        await self.hass.async_add_executor_job(
+            self.vacuum.send_command, "start", payload
         )
 
 
@@ -322,9 +462,9 @@ class BraavaJet(IRobotVacuum):
 
     _attr_supported_features = SUPPORT_BRAAVA
 
-    def __init__(self, roomba, blid) -> None:
+    def __init__(self, roomba, blid, domain_data: RoombaData) -> None:
         """Initialize the Roomba handler."""
-        super().__init__(roomba, blid)
+        super().__init__(roomba, blid, domain_data)
 
         # Initialize fan speed list
         self._attr_fan_speed_list = [

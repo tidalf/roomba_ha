@@ -1,0 +1,145 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "Device is already configured",
+      "cannot_connect": "Failed to connect",
+      "not_irobot_device": "Discovered device is not an iRobot device",
+      "short_blid": "The BLID was truncated",
+      "robot_not_in_cloud": "This robot was not found in your iRobot cloud account. The BLID does not match any robot."
+    },
+    "error": {
+      "cannot_connect": "Failed to connect",
+      "cloud_auth_failed": "Failed to authenticate with iRobot cloud. Check your email and password.",
+      "no_robots_found": "No robots found in your iRobot cloud account."
+    },
+    "flow_title": "{name} ({host})",
+    "step": {
+      "user": {
+        "description": "How would you like to set up your Roomba or Braava?",
+        "title": "iRobot Roomba"
+      },
+      "link_or_cloud": {
+        "description": "Your device {name} was found. How would you like to retrieve the password?",
+        "title": "Choose authentication method"
+      },
+      "manual": {
+        "data": {
+          "host": "Host"
+        },
+        "data_description": {
+          "host": "The hostname or IP address of your Roomba or Braava."
+        },
+        "description": "Enter the IP address of your Roomba or Braava.",
+        "title": "Manually connect to the device"
+      },
+      "link": {
+        "description": "Make sure that the iRobot app is not running on any device. Press and hold the Home button (or both Home and Spot buttons) on {name} until the device generates a sound (about two seconds), then submit within 30 seconds.",
+        "title": "Retrieve password"
+      },
+      "link_manual": {
+        "data": {
+          "password": "Password"
+        },
+        "description": "Enter the password for your robot. Follow the documentation at: {auth_help_url}",
+        "title": "Enter password"
+      },
+      "cloud_login": {
+        "data": {
+          "cloud_email": "iRobot account email",
+          "cloud_password": "iRobot account password"
+        },
+        "description": "Enter your iRobot account credentials. Your robot password will be retrieved automatically from the cloud.",
+        "title": "Login with iRobot Cloud"
+      },
+      "cloud_robots": {
+        "data": {
+          "robot_id": "Robot"
+        },
+        "description": "Select the robot you want to add.",
+        "title": "Select robot"
+      },
+      "cloud_host": {
+        "data": {
+          "host": "Host"
+        },
+        "data_description": {
+          "host": "The hostname or IP address of your Roomba or Braava."
+        },
+        "description": "Enter the IP address of your robot for local control.",
+        "title": "Enter robot IP address"
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "bin_full": {
+        "name": "Bin full"
+      }
+    },
+    "select": {
+      "room": {
+        "name": "Room"
+      }
+    },
+    "sensor": {
+      "average_mission_time": {
+        "name": "Average mission time"
+      },
+      "battery_cycles": {
+        "name": "Battery cycles"
+      },
+      "canceled_missions": {
+        "name": "Canceled missions"
+      },
+      "dock_tank_level": {
+        "name": "Dock tank level"
+      },
+      "failed_missions": {
+        "name": "Failed missions"
+      },
+      "last_mission": {
+        "name": "Last mission start time"
+      },
+      "scrubs_count": {
+        "name": "Scrubs"
+      },
+      "successful_missions": {
+        "name": "Successful missions"
+      },
+      "tank_level": {
+        "name": "Tank level"
+      },
+      "total_cleaned_area": {
+        "name": "Total cleaned area"
+      },
+      "total_cleaning_time": {
+        "name": "Total cleaning time"
+      },
+      "total_missions": {
+        "name": "Total missions"
+      }
+    }
+  },
+  "services": {
+    "clean_rooms": {
+      "name": "Clean specific rooms",
+      "description": "Send the Roomba to clean specific rooms.",
+      "fields": {
+        "rooms": {
+          "name": "Rooms",
+          "description": "Room names to clean (must match names from your iRobot map, visible in the vacuum entity's rooms attribute)."
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "continuous": "Continuous",
+          "delay": "Delay"
+        }
+      }
+    }
+  }
+}

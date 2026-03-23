@@ -1,5 +1,6 @@
 {
   "domain": "roomba",
+  "version": "1.1.0",
   "name": "iRobot Roomba and Braava",
   "codeowners": ["@pschmitt", "@cyr-ius", "@shenxn", "@Orhideous"],
   "config_flow": true,
@@ -22,10 +23,11 @@
     }
   ],
   "documentation": "https://www.home-assistant.io/integrations/roomba",
+  "issue_tracker": "https://github.com/tidalf/roomba_ha/issues",
   "integration_type": "device",
   "iot_class": "local_push",
   "loggers": ["paho_mqtt", "roombapy"],
-  "requirements": ["roombapy==1.9.0"],
+  "requirements": ["roombapy==1.9.0", "irbt"],
   "zeroconf": [
     {
       "name": "irobot-*",

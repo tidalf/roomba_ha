@@ -1,0 +1,16 @@
+clean_rooms:
+  name: Clean specific rooms
+  description: Send the Roomba to clean specific rooms by name.
+  target:
+    entity:
+      domain: vacuum
+      integration: roomba
+  fields:
+    rooms:
+      name: Rooms
+      description: Room names to clean (must match names from your iRobot map, visible in the vacuum entity's "rooms" attribute).
+      required: true
+      example: "Cuisine"
+      selector:
+        text:
+          multiple: true
